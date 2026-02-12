@@ -24,6 +24,7 @@ st.markdown("""
 # ==============================================================================
 # 1. FUNCIONES DE AGRUPACIÓN (CLUSTERING VISUAL)
 # ==============================================================================
+
 def graficar_clusters(df_input, n_clusters=5):
     """Visualización 3D para entender la mezcla de carga."""
     df_viz = df_input.copy()
@@ -46,64 +47,89 @@ def graficar_clusters(df_input, n_clusters=5):
 # ==============================================================================
 # 2. LÓGICA DE "PICKING" (EMPAREJAMIENTO PREVIO)
 # ==============================================================================
+def limpiar_y_preparar_datos(df_raw):
+    """Normaliza columnas: Paquete->ID, Largo fmt, Ancho/Alto fijos, Key Agrupación."""
+    df = df_raw.copy()
+    
+    # 1. Formatear Largo (de "4,8" string a 480 int)
+    def procesar_largo(val):
+        try:
+            val_str = str(val).replace(',', '.')
+            return int(float(val_str) * 100)
+        except:
+            return 0
+
+    df['Largo_cm'] = df['Largo'].apply(procesar_largo)
+    
+    # 2. Dimensiones Fijas
+    df['Ancho_cm'] = 110
+    df['Alto_cm'] = 120
+    
+    # 3. Identificadores y Key de Agrupación (Pedido + Pos)
+    df['ID'] = df['Paquete']
+    df['Pedido_Key'] = df['Pedido'].astype(str) + "_" + df['Pos Pedido'].astype(str)
+    
+    # 4. Asegurar Peso numérico
+    df['Peso'] = pd.to_numeric(df['Peso'], errors='coerce').fillna(0)
+
+    # 5. Generar Color por Pedido para diferenciación visual
+    unique_keys = df['Pedido_Key'].unique()
+    color_map = {k: f'rgb({random.randint(50,200)},{random.randint(50,200)},{random.randint(50,200)})' for k in unique_keys}
+    df['Color'] = df['Pedido_Key'].map(color_map)
+
+    # 6. Seleccionar y renombrar para el algoritmo
+    df_final = df[[
+        'ID', 'Largo_cm', 'Ancho_cm', 'Alto_cm', 'Peso', 'Color', 'Pedido_Key', 'Pedido', 'Pos Pedido'
+    ]].rename(columns={'Largo_cm': 'Largo', 'Ancho_cm': 'Ancho', 'Alto_cm': 'Alto'})
+    
+    # Ordenar para priorizar carga ordenada
+    return df_final.sort_values(by=['Pedido_Key', 'Largo'], ascending=[True, False])
+
 def generar_pares_logicos(df_items):
-    """
-    Simula la inteligencia de la grúa antes de entrar al contenedor.
-    Agrupa items en pares (Base + Top) si son compatibles.
-    """
-    # Ordenamos por Ancho (crítico para las uñas), luego Largo, luego Peso
-    items = df_items.sort_values(by=['Ancho', 'Largo', 'Peso'], ascending=[False, False, False]).to_dict('records')
+    # Ordenamos priorizando el Pedido_Key
+    items = df_items.sort_values(by=['Pedido_Key', 'Largo', 'Peso'], ascending=[True, False, False]).to_dict('records')
     pares = []
     usados = set()
     
-    TOLERANCIA_ANCHO = 5   # cm (Para que las uñas agarren bien ambos)
-    TOLERANCIA_LARGO = 40  # cm (Diferencia máxima permitida entre arriba y abajo)
+    TOLERANCIA_LARGO = 40
     
     for i in range(len(items)):
         if i in usados: continue
-            
         item_base = items[i]
         mejor_pareja_idx = -1
         
-        # Buscamos compañero
         for j in range(i + 1, len(items)):
             if j in usados: continue
             candidato = items[j]
             
-            # Regla 1: Ancho similar
-            if abs(candidato['Ancho'] - item_base['Ancho']) > TOLERANCIA_ANCHO:
-                continue
+            # --- RESTRICCIÓN DURA: MISMO PEDIDO Y POSICIÓN ---
+            if item_base['Pedido_Key'] != candidato['Pedido_Key']:
+                continue 
             
-            # Regla 2: Largo similar
+            # Regla Largo similar
             if abs(candidato['Largo'] - item_base['Largo']) > TOLERANCIA_LARGO:
                 continue
             
             mejor_pareja_idx = j
             break
         
+        # Guardamos Pedido_Key en el objeto par para rastreo
         if mejor_pareja_idx != -1:
-            # Creamos PAR
             item_top = items[mejor_pareja_idx]
             pares.append({
-                'tipo': 'par',
-                'base': item_base,
-                'top': item_top,
-                # Dimensiones nominales del bloque (el solver ajustará el offset)
+                'tipo': 'par', 'base': item_base, 'top': item_top,
                 'Largo_Ref': max(item_base['Largo'], item_top['Largo']),
                 'Ancho_Ref': max(item_base['Ancho'], item_top['Ancho']),
-                'Peso_Total': item_base['Peso'] + item_top['Peso']
+                'Peso_Total': item_base['Peso'] + item_top['Peso'],
+                'Pedido_Key': item_base['Pedido_Key'] # Metadata
             })
-            usados.add(i)
-            usados.add(mejor_pareja_idx)
+            usados.add(i); usados.add(mejor_pareja_idx)
         else:
-            # SINGLE (Va solo en el piso)
             pares.append({
-                'tipo': 'single',
-                'base': item_base,
-                'top': None,
-                'Largo_Ref': item_base['Largo'],
-                'Ancho_Ref': item_base['Ancho'],
-                'Peso_Total': item_base['Peso']
+                'tipo': 'single', 'base': item_base, 'top': None,
+                'Largo_Ref': item_base['Largo'], 'Ancho_Ref': item_base['Ancho'],
+                'Peso_Total': item_base['Peso'],
+                'Pedido_Key': item_base['Pedido_Key'] # Metadata
             })
             usados.add(i)
             
@@ -346,6 +372,8 @@ def resolver_contenedor_consolidado(lista_pares, cont_l, cont_w, cont_h, max_pes
                     'ID': base['ID'],
                     'x': xx, 'y': yy, 'z': 0,
                     'Largo': l_fin, 'Ancho': w_fin, 'Alto': base['Alto'],
+                    'Pedido': base.get('Pedido', ''),
+                    'Pos Pedido': base.get('Pos Pedido', ''),
                     'Peso': base['Peso'], 'Color': base['Color'],
                     'Rotado': 'Sí' if rr else 'No', 'Piso': '1 (Base)',
                     'Offset_Ref': 0
@@ -369,6 +397,8 @@ def resolver_contenedor_consolidado(lista_pares, cont_l, cont_w, cont_h, max_pes
                         'x': xt, 'y': yt, 'z': base['Alto'],
                         'Largo': lt, 'Ancho': wt, 'Alto': top['Alto'],
                         'Peso': top['Peso'], 'Color': top['Color'],
+                        'Pedido': base.get('Pedido', ''),
+                    'Pos Pedido': base.get('Pos Pedido', ''),
                         'Rotado': 'Sí' if rr else 'No', 'Piso': '2 (Sup)',
                         'Offset_Ref': off_val
                     })
@@ -378,73 +408,137 @@ def resolver_contenedor_consolidado(lista_pares, cont_l, cont_w, cont_h, max_pes
     else:
         return pd.DataFrame(), 0, [], (600, 117.5)
     
-def ejecutar_optimizacion_flota(df_total, n_contenedores, max_peso):
+def ejecutar_optimizacion_flota(df_total, max_peso):
+    """
+    Optimiza la carga usando los contenedores necesarios.
+    Restricción: Si un contenedor generado tiene < 30 m3, se descarta y la carga queda en piso.
+    """
     contenedores_res = {}
-    items_pendientes = df_total.copy()
+    ids_cargados_total = set()
     
+    # Agrupamos por Pedido + Posición (Ya viene filtrado desde el sidebar)
+    grupos_pedidos = df_total.groupby('Pedido_Key')
+    
+    cont_global_idx = 1
     progreso = st.progress(0)
     status = st.empty()
+    
+    total_grupos = len(grupos_pedidos)
+    grupo_actual_idx = 0
+    
+    MIN_VOL_M3 = 30.0  # RESTRICCIÓN DE NEGOCIO
 
-    for i in range(1, n_contenedores + 1):
-        if items_pendientes.empty: break
+    for pedido_key, df_grupo in grupos_pedidos:
+        grupo_actual_idx += 1
+        status.markdown(f"**Procesando:** {pedido_key}...")
+        
+        items_pendientes_pedido = df_grupo.copy()
+        
+        # Bucle infinito: MIENTRAS queden items para este pedido
+        while not items_pendientes_pedido.empty:
             
-        status.markdown(f"**Contenedor {i}:** Generando pares y optimizando estiba...")
-        
-        batch_size = 80 
-        batch = items_pendientes.head(batch_size)
-        
-        pares_candidatos = generar_pares_logicos(batch)
-        
-        # CAMBIO AQUÍ: Desempaquetamos la tupla extra (coords_cg)
-        df_cargado, peso, ids, coords_cg = resolver_contenedor_consolidado(
-            pares_candidatos, 1200, 235, 269, int(max_peso)
-        )
-        
-        if not df_cargado.empty:
-            df_cargado['m3'] = (df_cargado['Largo']*df_cargado['Ancho']*df_cargado['Alto'])/1e6
+            # Tomamos lote
+            batch = items_pendientes_pedido.head(80)
+            pares_candidatos = generar_pares_logicos(batch)
             
-            contenedores_res[f"Contenedor {i}"] = {
-                "items": df_cargado,
-                "peso_total": peso,
-                "m3_total": df_cargado['m3'].sum(),
-                "n_bultos": len(df_cargado),
-                "cg_x": coords_cg[0],  # Usamos el valor directo
-                "cg_y": coords_cg[1]   # Usamos el valor directo
-            }
-            items_pendientes = items_pendientes[~items_pendientes['ID'].isin(ids)]
+            # Ejecutamos solver
+            df_cargado, peso, ids, coords_cg = resolver_contenedor_consolidado(
+                pares_candidatos, 1200, 235, 269, int(max_peso)
+            )
+            
+            if not df_cargado.empty:
+                # Calcular volumen total del contenedor propuesto
+                df_cargado['m3'] = (df_cargado['Largo']*df_cargado['Ancho']*df_cargado['Alto'])/1e6
+                vol_total = df_cargado['m3'].sum()
+                
+                # --- RESTRICCIÓN DE VOLUMEN MÍNIMO ---
+                if vol_total < MIN_VOL_M3:
+                    # Si no cumple con 30m3, NO se genera el contenedor.
+                    # Rompemos el bucle de este pedido porque el remanente no justifica contenedor.
+                    # Los items se quedan en 'items_pendientes_pedido' y pasarán a piso.
+                    break 
+                
+                # Si cumple, guardamos el contenedor
+                contenedores_res[f"Contenedor {cont_global_idx}"] = {
+                    "items": df_cargado,
+                    "peso_total": peso,
+                    "m3_total": vol_total,
+                    "cg_x": coords_cg[0],
+                    "cg_y": coords_cg[1],
+                    "pedidos": [pedido_key]
+                }
+                
+                ids_cargados_total.update(ids)
+                items_pendientes_pedido = items_pendientes_pedido[~items_pendientes_pedido['ID'].isin(ids)]
+                cont_global_idx += 1
+            else:
+                # El solver no pudo meter nada (piezas gigantes o incompatibles)
+                break
         
-        progreso.progress(i / n_contenedores)
+        progreso.progress(grupo_actual_idx / total_grupos)
 
-    status.success("✅ ¡Planificación completada!")
+    status.success(f"✅ ¡Planificación completada! Se generaron {cont_global_idx - 1} contenedores.")
     progreso.empty()
-    return contenedores_res, items_pendientes
+    
+    # Calculamos sobrantes (Todo lo que no entró o no cumplió el mínimo de 30m3)
+    items_sobrantes = df_total[~df_total['ID'].isin(ids_cargados_total)]
+    
+    return contenedores_res, items_sobrantes
 
 # ==============================================================================
-# 4. INTERFAZ DE USUARIO
+# 4. INTERFAZ DE USUARIO (SIDEBAR + EJECUCIÓN)
 # ==============================================================================
 with st.sidebar:
-    st.header("1. Datos de Entrada")
-    uploaded_file = st.file_uploader("Excel (ID, Largo, Ancho, Alto, Peso)", type=["xlsx"])
+    st.header("1. Carga de Datos")
+    uploaded_file = st.file_uploader("Excel (Paquete, Largo, Pedido, Pos...)", type=["xlsx"])
     
-    st.header("2. Parámetros")
-    n_cont = st.number_input("N° Contenedores", 1, 50, 5)
-    max_w = st.number_input("Peso Máx (kg)", value=26000)
+    df_clean = pd.DataFrame()
+    seleccion_usuario = []
     
-    btn_calc = st.button("🚀 Calcular Carga", type="primary")
+    # Procesamos el archivo INMEDIATAMENTE para obtener las opciones del selector
+    if uploaded_file:
+        try:
+            df_raw = pd.read_excel(uploaded_file)
+            # Usamos la función de limpieza que definimos antes
+            df_clean = limpiar_y_preparar_datos(df_raw)
+            
+            st.header("2. Configuración de Carga")
+            
+            # Crear lista de opciones legible: "Pedido: 100 - Pos: 1"
+            # Mapeamos etiqueta -> Pedido_Key para filtrar después
+            opciones_unicas = df_clean[['Pedido', 'Pos Pedido', 'Pedido_Key']].drop_duplicates().sort_values(['Pedido', 'Pos Pedido'])
+            opciones_unicas['Label'] = "Pedido: " + opciones_unicas['Pedido'].astype(str) + " | Pos: " + opciones_unicas['Pos Pedido'].astype(str)
+            
+            # SELECTOR MULTIPLE
+            opciones_display = opciones_unicas['Label'].tolist()
+            seleccion_labels = st.multiselect(
+                "Seleccionar Pedidos a Consolidar:",
+                options=opciones_display,
+                default=opciones_display # Por defecto selecciona todo
+            )
+            
+            # Recuperar las Keys de la selección
+            seleccion_keys = opciones_unicas[opciones_unicas['Label'].isin(seleccion_labels)]['Pedido_Key'].tolist()
+            
+            st.divider()
+            max_w = st.number_input("Peso Máx por Contenedor (kg)", value=26000)
+            st.info("Nota: Se descartarán contenedores con < 30 m³.")
+            
+            btn_calc = st.button("🚀 Calcular Carga", type="primary", disabled=(len(seleccion_keys)==0))
+            
+        except Exception as e:
+            st.error(f"Error leyendo archivo: {e}")
 
-if uploaded_file and btn_calc:
-    try:
-        df_input = pd.read_excel(uploaded_file)
-        # Limpieza y generación de colores
-        cols_num = ['Largo', 'Ancho', 'Alto', 'Peso']
-        for c in cols_num: df_input[c] = pd.to_numeric(df_input[c], errors='coerce').fillna(0).astype(int)
-        
-        if 'Color' not in df_input.columns:
-            df_input['Color'] = [f'rgb({random.randint(100,200)},{random.randint(80,150)},{random.randint(50,120)})' for _ in range(len(df_input))]
-
-        st.session_state['res'] = ejecutar_optimizacion_flota(df_input, n_cont, max_w)
-    except Exception as e:
-        st.error(f"Error procesando archivo: {e}")
+# LÓGICA DE EJECUCIÓN
+if uploaded_file and btn_calc and not df_clean.empty:
+    # 1. Filtramos el DataFrame con la selección del usuario
+    df_procesar = df_clean[df_clean['Pedido_Key'].isin(seleccion_keys)]
+    
+    if df_procesar.empty:
+        st.warning("No hay ítems en la selección realizada.")
+    else:
+        # 2. Ejecutamos la optimización SIN pasar número de contenedores
+        st.session_state['res'] = ejecutar_optimizacion_flota(df_procesar, max_w)
 
 # ==============================================================================
 # 5. VISUALIZACIÓN DE RESULTADOS (COMPATIBLE VERSIONES ANTIGUAS)
