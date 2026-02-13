@@ -13,12 +13,12 @@ import plotly.express as px
 # ==============================================================================
 st.set_page_config(layout="wide", page_title="Optimizador Consolidado - Madera Verde")
 
-st.title("🌲 Optimizador de Carga: Lógica de Grúa (Pares + Deslizamiento)")
+st.title("Optimizador de Estiba")
 st.markdown("""
 **Nueva Lógica Operacional:**
-1.  **Picking Doble:** El algoritmo simula a la grúa tomando dos paquetes compatibles (mismo ancho, largo similar).
-2.  **Ajuste Dinámico (Slide):** El paquete superior puede **deslizarse hasta un 20%** longitudinalmente sobre el inferior para encajar mejor.
-3.  **Restricciones:** Carga pegada a muros y separación mínima entre filas.
+1.  **Dos pisos de carga**
+2.  **Slide de 20%**
+3.  **Considera centro de gravedad**
 """)
 
 # ==============================================================================
@@ -743,3 +743,4 @@ if 'res' in st.session_state:
 
     if not sobrante.empty:
         st.error(f"⚠️ Quedaron {len(sobrante)} bultos sin cargar.")
+
