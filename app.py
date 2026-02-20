@@ -85,208 +85,252 @@ def limpiar_y_preparar_datos(df_raw):
     # Ordenar para priorizar carga ordenada
     return df_final.sort_values(by=['Pedido_Key', 'Largo'], ascending=[True, False])
 
-def generar_pares_logicos(df_items):
-    # Ordenamos priorizando el Pedido_Key
+def generar_stacks_logicos(df_items, max_h_cont=269):
+    """
+    Agrupa ítems en stacks de 1, 2 o 3 niveles respetando altura máxima.
+    """
+    # Ordenamos: Prioridad Pedido -> Largo -> Peso
     items = df_items.sort_values(by=['Pedido_Key', 'Largo', 'Peso'], ascending=[True, False, False]).to_dict('records')
-    pares = []
+    stacks = []
     usados = set()
     
-    TOLERANCIA_LARGO = 40
+    TOLERANCIA_LARGO = 40  # Diferencia máxima de largo permitida entre pisos
     
     for i in range(len(items)):
         if i in usados: continue
-        item_base = items[i]
-        mejor_pareja_idx = -1
         
-        for j in range(i + 1, len(items)):
-            if j in usados: continue
-            candidato = items[j]
-            
-            # --- RESTRICCIÓN DURA: MISMO PEDIDO Y POSICIÓN ---
-            if item_base['Pedido_Key'] != candidato['Pedido_Key']:
-                continue 
-            
-            # Regla Largo similar
-            if abs(candidato['Largo'] - item_base['Largo']) > TOLERANCIA_LARGO:
-                continue
-            
-            mejor_pareja_idx = j
-            break
+        # --- NIVEL 1 (BASE) ---
+        base = items[i]
+        stack_items = [base]
+        current_h = base['Alto']
+        usados.add(i)
         
-        # Guardamos Pedido_Key en el objeto par para rastreo
-        if mejor_pareja_idx != -1:
-            item_top = items[mejor_pareja_idx]
-            pares.append({
-                'tipo': 'par', 'base': item_base, 'top': item_top,
-                'Largo_Ref': max(item_base['Largo'], item_top['Largo']),
-                'Ancho_Ref': max(item_base['Ancho'], item_top['Ancho']),
-                'Peso_Total': item_base['Peso'] + item_top['Peso'],
-                'Pedido_Key': item_base['Pedido_Key'] # Metadata
-            })
-            usados.add(i); usados.add(mejor_pareja_idx)
-        else:
-            pares.append({
-                'tipo': 'single', 'base': item_base, 'top': None,
-                'Largo_Ref': item_base['Largo'], 'Ancho_Ref': item_base['Ancho'],
-                'Peso_Total': item_base['Peso'],
-                'Pedido_Key': item_base['Pedido_Key'] # Metadata
-            })
-            usados.add(i)
+        # Intentamos buscar hasta 2 niveles más (total 3)
+        for nivel in range(2): 
+            mejor_candidato_idx = -1
             
-    return pares
+            # Buscamos candidato para el siguiente nivel
+            for j in range(i + 1, len(items)):
+                if j in usados: continue
+                candidato = items[j]
+                
+                # RESTRICCIONES DURAS
+                if base['Pedido_Key'] != candidato['Pedido_Key']: continue # Mismo pedido
+                if abs(candidato['Largo'] - base['Largo']) > TOLERANCIA_LARGO: continue # Largo similar
+                if current_h + candidato['Alto'] > max_h_cont: continue # Altura fit
+                
+                mejor_candidato_idx = j
+                break # Greedy: tomamos el primero que calce (por orden de largo/peso)
+            
+            if mejor_candidato_idx != -1:
+                candidato_add = items[mejor_candidato_idx]
+                stack_items.append(candidato_add)
+                current_h += candidato_add['Alto']
+                usados.add(mejor_candidato_idx)
+            else:
+                # Si no encontramos para el nivel 2, ya no buscamos para el 3
+                break
+        
+        # Calculamos metadatos del stack completo
+        max_l = max(it['Largo'] for it in stack_items)
+        max_w = max(it['Ancho'] for it in stack_items)
+        peso_total = sum(it['Peso'] for it in stack_items)
+        
+        stacks.append({
+            'items': stack_items,
+            'Largo_Ref': max_l,
+            'Ancho_Ref': max_w,
+            'Peso_Total': peso_total,
+            'Pedido_Key': base['Pedido_Key']
+        })
+            
+    return stacks
 
-# ==============================================================================
-# 3. MOTOR DE OPTIMIZACIÓN (SOLVER CON OFFSET)
-# ==============================================================================
-def resolver_contenedor_consolidado(lista_pares, cont_l, cont_w, cont_h, max_peso):
+def resolver_contenedor_consolidado(lista_stacks, cont_l, cont_w, cont_h, max_peso):
     model = cp_model.CpModel()
-    n_units = len(lista_pares)
+    n_stacks = len(lista_stacks)
     
-    # --- CONFIGURACIÓN DE HOLGURAS ---
+    # --- CONFIGURACIÓN ---
     GAP_Y = 10        
     MARGIN_DOOR = 10  
     
-    # --- VARIABLES DE DECISIÓN PRINCIPALES ---
-    x = [model.NewIntVar(0, cont_l, f'x_{i}') for i in range(n_units)]
-    y = [model.NewIntVar(0, cont_w, f'y_{i}') for i in range(n_units)]
-    rotated = [model.NewBoolVar(f'rot_{i}') for i in range(n_units)]
-    placed = [model.NewBoolVar(f'placed_{i}') for i in range(n_units)]
-    stick_left = [model.NewBoolVar(f'left_{i}') for i in range(n_units)]
-    
-    # Variables auxiliares
-    offset_top = []
-    abs_offsets = [] # NUEVO: Para medir cuánto se deslizó (valor absoluto)
-    
-    l_base_eff = [model.NewIntVar(0, 3000, f'lbe_{i}') for i in range(n_units)]
-    w_base_eff = [model.NewIntVar(0, 3000, f'wbe_{i}') for i in range(n_units)]
+    # --- VARIABLES GLOBALES ---
+    block_start = model.NewIntVar(0, cont_l, 'block_start')
     total_weight_var = model.NewIntVar(0, max_peso, 'total_weight')
+
+    # Arrays de variables por Stack
+    x_rel = []     # Posición relativa al bloque
+    x = []         # Posición absoluta (x_rel + block_start)
+    y = []
+    rotated = []
+    placed = []
+    stick_left = [] # Para pegar a muros
     
-    # Variables para CoG
+    offset_upper = [] # Deslizamiento de los pisos superiores respecto a la base
+    abs_offsets = [] 
+    
+    x_start = [] # Bounding Box Real
+    x_end = []
+    y_end_abs = []
+    
     moments_x = []
     moments_y = []
 
-    # Variables para Bounding Box (Límites reales anticolisión)
-    x_start = [model.NewIntVar(0, cont_l, f'xs_{i}') for i in range(n_units)]
-    x_end   = [model.NewIntVar(0, cont_l, f'xe_{i}') for i in range(n_units)]
-    y_end_abs = [model.NewIntVar(0, cont_w, f'ye_{i}') for i in range(n_units)]
-
-    # --- BUCLE DE CREACIÓN DE VARIABLES Y RESTRICCIONES ---
-    for i in range(n_units):
-        u = lista_pares[i]
-        base = u['base']
-        w_b = int(base['Peso'])
-
-        # 1. Geometría Base
-        model.Add(l_base_eff[i] == base['Largo']).OnlyEnforceIf(rotated[i].Not())
-        model.Add(w_base_eff[i] == base['Ancho']).OnlyEnforceIf(rotated[i].Not())
-        model.Add(l_base_eff[i] == base['Ancho']).OnlyEnforceIf(rotated[i])
-        model.Add(w_base_eff[i] == base['Largo']).OnlyEnforceIf(rotated[i])
+    # --- BUCLE DE GENERACIÓN DE VARIABLES POR STACK ---
+    for i in range(n_stacks):
+        stk = lista_stacks[i]
+        base_item = stk['items'][0] # El item base define muchas cosas
+        n_pisos = len(stk['items'])
         
-        # 2. Estrategia de Muros
-        model.Add(y[i] == 0).OnlyEnforceIf([placed[i], stick_left[i]])
-        model.Add(y[i] == cont_w - w_base_eff[i]).OnlyEnforceIf([placed[i], stick_left[i].Not()])
+        # 1. Variables de Decisión
+        p_i = model.NewBoolVar(f'placed_{i}')
+        placed.append(p_i)
         
-        # Limpieza de no colocados
-        model.Add(x[i] == 0).OnlyEnforceIf(placed[i].Not())
-        model.Add(y[i] == 0).OnlyEnforceIf(placed[i].Not())
-
-        # 3. Cálculo de Momentos BASE (X e Y)
-        cx_base_2 = model.NewIntVar(0, cont_l * 2, f'cxb2_{i}')
-        model.Add(cx_base_2 == x[i] * 2 + l_base_eff[i])
+        r_i = model.NewBoolVar(f'rot_{i}')
+        rotated.append(r_i)
         
-        cy_base_2 = model.NewIntVar(0, cont_w * 2, f'cyb2_{i}')
-        model.Add(cy_base_2 == y[i] * 2 + w_base_eff[i])
+        xr_i = model.NewIntVar(0, cont_l, f'x_rel_{i}')
+        x_rel.append(xr_i)
+        
+        x_i = model.NewIntVar(0, cont_l, f'x_{i}')
+        x.append(x_i)
+        
+        y_i = model.NewIntVar(0, cont_w, f'y_{i}')
+        y.append(y_i)
+        
+        sl_i = model.NewBoolVar(f'left_{i}')
+        stick_left.append(sl_i)
 
-        mx_b = model.NewIntVar(0, cont_l * 2 * w_b, f'mx_b_{i}')
-        model.Add(mx_b == cx_base_2 * w_b).OnlyEnforceIf(placed[i])
-        model.Add(mx_b == 0).OnlyEnforceIf(placed[i].Not())
-        moments_x.append(mx_b)
+        # Conexión Bloque
+        model.Add(x_i == block_start + xr_i).OnlyEnforceIf(p_i)
+        
+        # Limpieza si no placed
+        model.Add(x_i == 0).OnlyEnforceIf(p_i.Not())
+        model.Add(xr_i == 0).OnlyEnforceIf(p_i.Not())
+        model.Add(y_i == 0).OnlyEnforceIf(p_i.Not())
 
-        my_b = model.NewIntVar(0, cont_w * 2 * w_b, f'my_b_{i}')
-        model.Add(my_b == cy_base_2 * w_b).OnlyEnforceIf(placed[i])
-        model.Add(my_b == 0).OnlyEnforceIf(placed[i].Not())
-        moments_y.append(my_b)
+        # 2. Dimensiones Efectivas de la BASE
+        l_base_eff = model.NewIntVar(0, 3000, f'lbe_{i}')
+        w_base_eff = model.NewIntVar(0, 3000, f'wbe_{i}')
+        
+        model.Add(l_base_eff == base_item['Largo']).OnlyEnforceIf(r_i.Not())
+        model.Add(w_base_eff == base_item['Ancho']).OnlyEnforceIf(r_i.Not())
+        model.Add(l_base_eff == base_item['Ancho']).OnlyEnforceIf(r_i)
+        model.Add(w_base_eff == base_item['Largo']).OnlyEnforceIf(r_i)
 
-        # 4. Lógica PAR vs SINGLE
-        if u['tipo'] == 'par':
-            top = u['top']
-            w_t = int(top['Peso'])
-            
-            # --- CAMBIO 1: AUMENTAR LÍMITE AL 80% ---
-            max_slide = int(base['Largo'] * 0.20)
+        # Muros (Y)
+        model.Add(y_i == 0).OnlyEnforceIf([p_i, sl_i])
+        model.Add(y_i == cont_w - w_base_eff).OnlyEnforceIf([p_i, sl_i.Not()])
+
+        # 3. Lógica de Slide (Solo si hay más de 1 piso)
+        if n_pisos > 1:
+            max_slide = int(base_item['Largo'] * 0.20)
             off = model.NewIntVar(-max_slide, max_slide, f'off_{i}')
-            offset_top.append(off)
-
-            # --- CAMBIO 2: VARIABLE PARA PENALIZACIÓN (Valor Absoluto) ---
-            abs_off = model.NewIntVar(0, max_slide, f'abs_off_{i}')
-            model.AddAbsEquality(abs_off, off)
-            abs_offsets.append(abs_off)
+            offset_upper.append(off)
             
-            # Altura
-            h_tot = base['Alto'] + top['Alto']
-            model.Add(h_tot <= cont_h).OnlyEnforceIf(placed[i])
+            a_off = model.NewIntVar(0, max_slide, f'aoff_{i}')
+            model.AddAbsEquality(a_off, off)
+            abs_offsets.append(a_off)
             
-            # Reglas Slide
-            model.Add(off == 0).OnlyEnforceIf(rotated[i]) # Si rota, no desliza
-            model.Add(x[i] + off >= 0).OnlyEnforceIf([placed[i], rotated[i].Not()])
-            model.Add(x[i] + off + top['Largo'] <= cont_l - MARGIN_DOOR).OnlyEnforceIf([placed[i], rotated[i].Not()])
-
-            # Dimensiones Top Efectivas
-            l_top_eff = model.NewIntVar(0, 3000, f'lte_{i}')
-            w_top_eff = model.NewIntVar(0, 3000, f'wte_{i}')
-            model.Add(l_top_eff == top['Largo']).OnlyEnforceIf(rotated[i].Not())
-            model.Add(w_top_eff == top['Ancho']).OnlyEnforceIf(rotated[i].Not())
-            model.Add(l_top_eff == top['Ancho']).OnlyEnforceIf(rotated[i])
-            model.Add(w_top_eff == top['Largo']).OnlyEnforceIf(rotated[i])
-
-            # Momento Top
-            cx_top_2 = model.NewIntVar(-max_slide*2, (cont_l + max_slide)*2, f'cxt2_{i}')
-            model.Add(cx_top_2 == (x[i] + off) * 2 + l_top_eff)
-            
-            cy_top_2 = model.NewIntVar(0, cont_w * 2, f'cyt2_{i}')
-            model.Add(cy_top_2 == y[i] * 2 + w_top_eff)
-
-            mx_t = model.NewIntVar(-cont_l * 2 * w_t, cont_l * 2 * w_t, f'mx_t_{i}')
-            model.Add(mx_t == cx_top_2 * w_t).OnlyEnforceIf(placed[i])
-            model.Add(mx_t == 0).OnlyEnforceIf(placed[i].Not())
-            moments_x.append(mx_t)
-
-            my_t = model.NewIntVar(0, cont_w * 2 * w_t, f'my_t_{i}')
-            model.Add(my_t == cy_top_2 * w_t).OnlyEnforceIf(placed[i])
-            model.Add(my_t == 0).OnlyEnforceIf(placed[i].Not())
-            moments_y.append(my_t)
-            
-            # --- BOUNDING BOX (Par) ---
-            # x_start = min(x_base, x_top)
-            model.AddMinEquality(x_start[i], [x[i], x[i] + off])
-            
-            # x_end = max(fin_base, fin_top)
-            end_base = model.NewIntVar(0, cont_l, f'eb_{i}')
-            end_top = model.NewIntVar(-1000, cont_l+1000, f'et_{i}')
-            model.Add(end_base == x[i] + l_base_eff[i])
-            model.Add(end_top == x[i] + off + l_top_eff)
-            model.AddMaxEquality(x_end[i], [end_base, end_top])
-            
-            # y_end = y + max(w_base, w_top)
-            max_w_stack = model.NewIntVar(0, 3000, f'mw_{i}')
-            model.AddMaxEquality(max_w_stack, [w_base_eff[i], w_top_eff])
-            model.Add(y_end_abs[i] == y[i] + max_w_stack)
-
+            # Restricciones Slide
+            model.Add(off == 0).OnlyEnforceIf(r_i) # Si rota, no desliza
+            model.Add(x_i + off >= 0).OnlyEnforceIf([p_i, r_i.Not()])
+            # El límite superior del contenedor se verifica con el Bounding Box más abajo
         else:
-            # Single
-            offset_top.append(model.NewConstant(0))
-            abs_offsets.append(model.NewConstant(0)) # No hay costo de slide
-            
-            model.Add(base['Alto'] <= cont_h).OnlyEnforceIf(placed[i])
-            
-            # Bounding Box Simple
-            model.Add(x_start[i] == x[i])
-            model.Add(x_end[i] == x[i] + l_base_eff[i])
-            model.Add(y_end_abs[i] == y[i] + w_base_eff[i])
+            offset_upper.append(model.NewConstant(0))
+            abs_offsets.append(model.NewConstant(0))
 
-    # --- NO SUPERPOSICIÓN (USANDO BOUNDING BOX) ---
-    for i in range(n_units):
-        for j in range(i + 1, n_units):
+        # 4. Cálculo de Momentos y Bounding Box Global del Stack
+        # Iteramos sobre los items del stack para sumar sus momentos y hallar el contorno
+        
+        current_stack_moments_x = []
+        current_stack_moments_y = []
+        
+        # Variables para calcular el Bounding Box (BB) del stack completo
+        bb_xs = model.NewIntVar(0, cont_l, f'bb_xs_{i}') # X Start Stack
+        bb_xe = model.NewIntVar(0, cont_l, f'bb_xe_{i}') # X End Stack
+        bb_ye = model.NewIntVar(0, cont_w, f'bb_ye_{i}') # Y End Stack (Ancho máx)
+        
+        list_ends_x = []
+        list_starts_x = []
+        list_widths = []
+
+        for idx_it, item in enumerate(stk['items']):
+            w_kg = int(item['Peso'])
+            
+            # Dimensiones locales
+            l_it_eff = model.NewIntVar(0, 3000, f'lie_{i}_{idx_it}')
+            w_it_eff = model.NewIntVar(0, 3000, f'wie_{i}_{idx_it}')
+            
+            model.Add(l_it_eff == item['Largo']).OnlyEnforceIf(r_i.Not())
+            model.Add(w_it_eff == item['Ancho']).OnlyEnforceIf(r_i.Not())
+            model.Add(l_it_eff == item['Ancho']).OnlyEnforceIf(r_i)
+            model.Add(w_it_eff == item['Largo']).OnlyEnforceIf(r_i)
+            
+            # Posición X del item (Base es x_i, Superiores son x_i + off)
+            pos_x_it = model.NewIntVar(-1000, 4000, f'px_{i}_{idx_it}')
+            if idx_it == 0:
+                model.Add(pos_x_it == x_i)
+            else:
+                model.Add(pos_x_it == x_i + offset_upper[i])
+            
+            # Momentos
+            cx_2 = model.NewIntVar(-2000, 8000, f'cx2_{i}_{idx_it}')
+            model.Add(cx_2 == pos_x_it * 2 + l_it_eff)
+            
+            cy_2 = model.NewIntVar(0, cont_w * 2, f'cy2_{i}_{idx_it}')
+            model.Add(cy_2 == y_i * 2 + w_it_eff)
+            
+            mx = model.NewIntVar(-cont_l*2*w_kg, cont_l*2*w_kg, f'mx_{i}_{idx_it}')
+            my = model.NewIntVar(0, cont_w*2*w_kg, f'my_{i}_{idx_it}')
+            
+            model.Add(mx == cx_2 * w_kg).OnlyEnforceIf(p_i)
+            model.Add(mx == 0).OnlyEnforceIf(p_i.Not())
+            
+            model.Add(my == cy_2 * w_kg).OnlyEnforceIf(p_i)
+            model.Add(my == 0).OnlyEnforceIf(p_i.Not())
+            
+            current_stack_moments_x.append(mx)
+            current_stack_moments_y.append(my)
+            
+            # Para Bounding Box
+            start_x_var = model.NewIntVar(0, cont_l, f'sx_{i}_{idx_it}')
+            end_x_var = model.NewIntVar(-1000, 4000, f'ex_{i}_{idx_it}')
+            
+            # Clamp manual para start_x (evitar negativos en BB logic)
+            # Como pos_x_it puede ser negativo por el slide, el BB start real es max(0, pos)
+            # Pero para colisiones usamos el valor crudo, el contenedor limita el rango.
+            model.Add(start_x_var == pos_x_it) 
+            model.Add(end_x_var == pos_x_it + l_it_eff)
+            
+            list_starts_x.append(start_x_var)
+            list_ends_x.append(end_x_var)
+            list_widths.append(w_it_eff)
+
+        # Definir BB del Stack Completo
+        model.AddMinEquality(bb_xs, list_starts_x)
+        model.AddMaxEquality(bb_xe, list_ends_x)
+        
+        max_width_stack = model.NewIntVar(0, 3000, f'mws_{i}')
+        model.AddMaxEquality(max_width_stack, list_widths)
+        model.Add(bb_ye == y_i + max_width_stack)
+        
+        # Guardamos para colisiones
+        x_start.append(bb_xs)
+        x_end.append(bb_xe)
+        y_end_abs.append(bb_ye)
+        
+        # Sumar momentos al global
+        moments_x.extend(current_stack_moments_x)
+        moments_y.extend(current_stack_moments_y)
+        
+        # Altura Total
+        h_total_stack = sum(it['Alto'] for it in stk['items'])
+        model.Add(h_total_stack <= cont_h).OnlyEnforceIf(p_i)
+
+    # --- COLISIONES ENTRE STACKS ---
+    for i in range(n_stacks):
+        for j in range(i + 1, n_stacks):
             left = model.NewBoolVar(f'{i}_L_{j}')
             right = model.NewBoolVar(f'{i}_R_{j}')
             back = model.NewBoolVar(f'{i}_B_{j}')
@@ -299,15 +343,15 @@ def resolver_contenedor_consolidado(lista_pares, cont_l, cont_w, cont_h, max_pes
             
             model.AddBoolOr([left, right, back, front]).OnlyEnforceIf([placed[i], placed[j]])
         
-        # Limites Contenedor Globales
+        # Límites globales contenedor
         model.Add(x_end[i] <= cont_l - MARGIN_DOOR).OnlyEnforceIf(placed[i])
         model.Add(y_end_abs[i] <= cont_w).OnlyEnforceIf(placed[i])
 
-    # --- OBJETIVOS Y RESTRICCIONES DURAS ---
-    model.Add(total_weight_var == sum(placed[i] * int(u['Peso_Total']) for i, u in enumerate(lista_pares)))
+    # --- OBJETIVOS DE PESO Y COG ---
+    model.Add(total_weight_var == sum(placed[i] * int(stk['Peso_Total']) for i, stk in enumerate(lista_stacks)))
     model.Add(total_weight_var <= max_peso)
     
-    # Restricciones CoG
+    # Límites CoG
     LIMIT_X_MIN = (600 - 60) * 2
     LIMIT_X_MAX = (600 + 60) * 2
     LIMIT_Y_MIN = 195 
@@ -321,25 +365,34 @@ def resolver_contenedor_consolidado(lista_pares, cont_l, cont_w, cont_h, max_pes
     model.Add(sum_my >= LIMIT_Y_MIN * total_weight_var)
     model.Add(sum_my <= LIMIT_Y_MAX * total_weight_var)
 
-    # ==========================================================================
-    # FUNCIÓN OBJETIVO FINAL
-    # ==========================================================================
-    # 1. Prioridad Máxima: Maximizar Peso ( * 10,000 )
-    # 2. Prioridad Media: Compactar hacia el fondo (- sum(x))
-    # 3. Prioridad Ajuste: Minimizar deslizamiento (- sum(abs_offsets))
-    #
-    # Al restar abs_offsets, el solver intentará mantenerlos en 0 a menos que
-    # moverlos sea la única forma de cargar más peso o cumplir el CoG.
+    # Desviación Ideal X
+    ideal_mx = model.NewIntVar(0, cont_l * 2 * max_peso, 'imx')
+    model.Add(ideal_mx == total_weight_var * 1200)
+    diff_mx = model.NewIntVar(-cont_l*2*max_peso, cont_l*2*max_peso, 'dmx')
+    model.Add(diff_mx == sum_mx - ideal_mx)
+    abs_diff_mx = model.NewIntVar(0, cont_l*2*max_peso, 'admx')
+    model.AddAbsEquality(abs_diff_mx, diff_mx)
     
+    # Desviación Ideal Y
+    ideal_my = model.NewIntVar(0, cont_w * 2 * max_peso, 'imy')
+    model.Add(ideal_my == total_weight_var * 235)
+    diff_my = model.NewIntVar(-cont_w*2*max_peso, cont_w*2*max_peso, 'dmy')
+    model.Add(diff_my == sum_my - ideal_my)
+    abs_diff_my = model.NewIntVar(0, cont_w*2*max_peso, 'admy')
+    model.AddAbsEquality(abs_diff_my, diff_my)
+
+    # --- FUNCIÓN OBJETIVO ---
     model.Maximize(
-        total_weight_var * 10000 
-        - sum(x) 
-        - sum(abs_offsets) * 5  # Factor de penalización (ajustable)
+        total_weight_var * 1000000 
+        - sum(x_rel) * 10       
+        - abs_diff_mx           
+        - abs_diff_my
+        - sum(abs_offsets) * 5
     )
 
     # --- SOLVE ---
     solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = 40.0
+    solver.parameters.max_time_in_seconds = 45.0
     solver.parameters.num_workers = 8
     status = solver.Solve(model)
 
@@ -351,58 +404,45 @@ def resolver_contenedor_consolidado(lista_pares, cont_l, cont_w, cont_h, max_pes
         peso_final = solver.Value(total_weight_var)
         val_mx = solver.Value(sum_mx)
         val_my = solver.Value(sum_my)
+        inicio_bloque = solver.Value(block_start)
         
         if peso_final > 0:
             cg_x_final = val_mx / (2 * peso_final)
             cg_y_final = val_my / (2 * peso_final)
 
-        for i in range(n_units):
+        for i in range(n_stacks):
             if solver.Value(placed[i]):
-                u = lista_pares[i]
-                base = u['base']
+                stk = lista_stacks[i]
                 
                 xx = solver.Value(x[i])
                 yy = solver.Value(y[i])
                 rr = solver.Value(rotated[i]) == 1
+                off_val = solver.Value(offset_upper[i]) if len(stk['items']) > 1 else 0
                 
-                l_fin = base['Ancho'] if rr else base['Largo']
-                w_fin = base['Largo'] if rr else base['Ancho']
+                current_z = 0
                 
-                results.append({
-                    'ID': base['ID'],
-                    'x': xx, 'y': yy, 'z': 0,
-                    'Largo': l_fin, 'Ancho': w_fin, 'Alto': base['Alto'],
-                    'Pedido': base.get('Pedido', ''),
-                    'Pos Pedido': base.get('Pos Pedido', ''),
-                    'Peso': base['Peso'], 'Color': base['Color'],
-                    'Rotado': 'Sí' if rr else 'No', 'Piso': '1 (Base)',
-                    'Offset_Ref': 0
-                })
-                ids_usados.append(base['ID'])
-                
-                if u['tipo'] == 'par':
-                    top = u['top']
-                    off_val = solver.Value(offset_top[i])
+                for idx_it, item in enumerate(stk['items']):
+                    # Definir X final (Base o Superior)
+                    final_x = xx if idx_it == 0 else xx + off_val
                     
-                    if rr:
-                        xt, yt = xx, yy
-                        lt, wt = top['Ancho'], top['Largo']
-                    else:
-                        xt = xx + off_val
-                        yt = yy 
-                        lt, wt = top['Largo'], top['Ancho']
+                    # Dimensiones si rota
+                    l_fin = item['Ancho'] if rr else item['Largo']
+                    w_fin = item['Largo'] if rr else item['Ancho']
                     
                     results.append({
-                        'ID': top['ID'],
-                        'x': xt, 'y': yt, 'z': base['Alto'],
-                        'Largo': lt, 'Ancho': wt, 'Alto': top['Alto'],
-                        'Peso': top['Peso'], 'Color': top['Color'],
-                        'Pedido': base.get('Pedido', ''),
-                    'Pos Pedido': base.get('Pos Pedido', ''),
-                        'Rotado': 'Sí' if rr else 'No', 'Piso': '2 (Sup)',
-                        'Offset_Ref': off_val
+                        'ID': item['ID'],
+                        'x': final_x, 'y': yy, 'z': current_z,
+                        'Largo': l_fin, 'Ancho': w_fin, 'Alto': item['Alto'],
+                        'Pedido': item.get('Pedido', ''),
+                        'Pos Pedido': item.get('Pos Pedido', ''),
+                        'Peso': item['Peso'], 'Color': item['Color'],
+                        'Rotado': 'Sí' if rr else 'No', 
+                        'Piso': f'Piso {idx_it + 1}',
+                        'Offset_Ref': off_val if idx_it > 0 else 0,
+                        'Block_Start': inicio_bloque
                     })
-                    ids_usados.append(top['ID'])
+                    ids_usados.append(item['ID'])
+                    current_z += item['Alto']
         
         return pd.DataFrame(results), peso_final, ids_usados, (cg_x_final, cg_y_final)
     else:
@@ -439,7 +479,7 @@ def ejecutar_optimizacion_flota(df_total, max_peso):
             
             # Tomamos lote
             batch = items_pendientes_pedido.head(80)
-            pares_candidatos = generar_pares_logicos(batch)
+            pares_candidatos = generar_stacks_logicos(batch)
             
             # Ejecutamos solver
             df_cargado, peso, ids, coords_cg = resolver_contenedor_consolidado(
