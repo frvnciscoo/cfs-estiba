@@ -74,9 +74,12 @@ def limpiar_y_preparar_datos(df_raw):
     df['Peso'] = pd.to_numeric(df['Peso'], errors='coerce').fillna(0)
 
     # 5. Generar Color por Pedido para diferenciación visual
-    unique_keys = df['Pedido_Key'].unique()
-    color_map = {k: f'rgb({random.randint(50,200)},{random.randint(50,200)},{random.randint(50,200)})' for k in unique_keys}
-    df['Color'] = df['Pedido_Key'].map(color_map)
+    unique_lengths = df['Largo_cm'].unique()
+    color_map = {
+        l: f'rgb({random.randint(50,220)},{random.randint(50,220)},{random.randint(50,220)})' 
+        for l in unique_lengths
+    }
+    df['Color'] = df['Largo_cm'].map(color_map)
 
     # 6. Seleccionar y renombrar para el algoritmo
     df_final = df[[
@@ -843,4 +846,5 @@ if 'res' in st.session_state:
 
     if not sobrante.empty:
         st.error(f"⚠️ Quedaron {len(sobrante)} bultos sin cargar.")
+
 
