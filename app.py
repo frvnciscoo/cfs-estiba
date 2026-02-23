@@ -7,6 +7,7 @@ from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 import numpy as np
 import plotly.express as px
+import itertools
 
 # ==============================================================================
 # CONFIGURACIÓN DE LA PÁGINA
@@ -16,8 +17,8 @@ st.set_page_config(layout="wide", page_title="Optimizador Consolidado - Madera V
 st.title("Optimizador de Estiba")
 st.markdown("""
 **Nueva Lógica Operacional:**
-1.  **Dos pisos de carga**
-2.  **Slide de 20%**
+1.  **Tres pisos de carga**
+2.  **Slide de 0.05%**
 3.  **Considera centro de gravedad**
 """)
 
@@ -85,59 +86,105 @@ def limpiar_y_preparar_datos(df_raw):
     # Ordenar para priorizar carga ordenada
     return df_final.sort_values(by=['Pedido_Key', 'Largo'], ascending=[True, False])
 
+def buscar_combinacion_nivel(candidatos, largo_base, max_h_disp, tolerancia=40, max_piezas=4):
+    """
+    Busca la mejor combinación de 1 a 4 piezas que sumen un largo similar a la base.
+    """
+    mejor_combo = None
+    mejor_diff = float('inf')
+    
+    # Probamos combinaciones de tamaño 1, 2, 3 y 4
+    for r in range(1, max_piezas + 1):
+        for combo in itertools.combinations(candidatos, r):
+            # Calculamos dimensiones del Macro-Paquete
+            largo_total = sum(it['Largo'] for it, idx in combo)
+            alto_max = max(it['Alto'] for it, idx in combo)
+            
+            # Verificamos restricciones
+            diff_largo = abs(largo_total - largo_base)
+            if diff_largo <= tolerancia and alto_max <= max_h_disp:
+                # Nos quedamos con la combinación que más se acerque al largo de la base
+                if diff_largo < mejor_diff:
+                    mejor_diff = diff_largo
+                    mejor_combo = combo
+                    
+    return mejor_combo
+
 def generar_stacks_logicos(df_items, max_h_cont=269):
-    """
-    Agrupa ítems en stacks de 1, 2 o 3 niveles respetando altura máxima.
-    """
-    # Ordenamos: Prioridad Pedido -> Largo -> Peso
     items = df_items.sort_values(by=['Pedido_Key', 'Largo', 'Peso'], ascending=[True, False, False]).to_dict('records')
     stacks = []
     usados = set()
     
-    TOLERANCIA_LARGO = 40  # Diferencia máxima de largo permitida entre pisos
+    TOLERANCIA_LARGO = 40  
     
     for i in range(len(items)):
         if i in usados: continue
         
-        # --- NIVEL 1 (BASE) ---
         base = items[i]
-        stack_items = [base]
+        
+        # El nivel 1 (base) lo mantenemos como 1 sola pieza principal por estabilidad
+        # Formato de Macro-Paquete: {'items_internos': [...], 'Largo': X, 'Ancho': Y, 'Alto': Z, 'Peso': W}
+        stack_levels = [{
+            'items_internos': [base],
+            'Largo': base['Largo'],
+            'Ancho': base['Ancho'],
+            'Alto': base['Alto'],
+            'Peso': base['Peso']
+        }]
+        
         current_h = base['Alto']
         usados.add(i)
         
-        # Intentamos buscar hasta 2 niveles más (total 3)
+        # Intentamos buscar hasta 2 niveles más (pisos 2 y 3)
         for nivel in range(2): 
-            mejor_candidato_idx = -1
+            h_disponible = max_h_cont - current_h
+            if h_disponible < 10: break # Ya no hay altura útil
             
-            # Buscamos candidato para el siguiente nivel
-            for j in range(i + 1, len(items)):
-                if j in usados: continue
-                candidato = items[j]
-                
-                # RESTRICCIONES DURAS
-                if base['Pedido_Key'] != candidato['Pedido_Key']: continue # Mismo pedido
-                if abs(candidato['Largo'] - base['Largo']) > TOLERANCIA_LARGO: continue # Largo similar
-                if current_h + candidato['Alto'] > max_h_cont: continue # Altura fit
-                
-                mejor_candidato_idx = j
-                break # Greedy: tomamos el primero que calce (por orden de largo/peso)
+            # Filtramos candidatos del mismo pedido y que no superen la altura disponible
+            candidatos_validos = [
+                (items[j], j) for j in range(i + 1, len(items)) 
+                if j not in usados 
+                and items[j]['Pedido_Key'] == base['Pedido_Key']
+                and items[j]['Alto'] <= h_disponible
+            ]
             
-            if mejor_candidato_idx != -1:
-                candidato_add = items[mejor_candidato_idx]
-                stack_items.append(candidato_add)
-                current_h += candidato_add['Alto']
-                usados.add(mejor_candidato_idx)
+            if not candidatos_validos: break
+            
+            # Llamamos a nuestra nueva lógica combinatoria
+            combo_encontrado = buscar_combinacion_nivel(
+                candidatos_validos, 
+                largo_base=base['Largo'], 
+                max_h_disp=h_disponible,
+                tolerancia=TOLERANCIA_LARGO,
+                max_piezas=4
+            )
+            
+            if combo_encontrado:
+                items_combo = [it for it, idx in combo_encontrado]
+                indices_combo = [idx for it, idx in combo_encontrado]
+                
+                # Creamos el Nivel Compuesto (Macro-Paquete)
+                nivel_compuesto = {
+                    'items_internos': items_combo,
+                    'Largo': sum(it['Largo'] for it in items_combo),
+                    'Ancho': max(it['Ancho'] for it in items_combo),
+                    'Alto': max(it['Alto'] for it in items_combo),
+                    'Peso': sum(it['Peso'] for it in items_combo)
+                }
+                
+                stack_levels.append(nivel_compuesto)
+                current_h += nivel_compuesto['Alto']
+                usados.update(indices_combo) # Marcamos todas las piezas elegidas como usadas
             else:
-                # Si no encontramos para el nivel 2, ya no buscamos para el 3
-                break
+                break # Si no pudimos armar un nivel entero, cortamos la torre aquí
         
-        # Calculamos metadatos del stack completo
-        max_l = max(it['Largo'] for it in stack_items)
-        max_w = max(it['Ancho'] for it in stack_items)
-        peso_total = sum(it['Peso'] for it in stack_items)
+        # Construimos el metadata del Stack para el Solver
+        peso_total = sum(lvl['Peso'] for lvl in stack_levels)
+        max_l = max(lvl['Largo'] for lvl in stack_levels)
+        max_w = max(lvl['Ancho'] for lvl in stack_levels)
         
         stacks.append({
-            'items': stack_items,
+            'niveles': stack_levels, # <-- AHORA ENVIAMOS NIVELES EN LUGAR DE ITEMS
             'Largo_Ref': max_l,
             'Ancho_Ref': max_w,
             'Peso_Total': peso_total,
@@ -179,8 +226,8 @@ def resolver_contenedor_consolidado(lista_stacks, cont_l, cont_w, cont_h, max_pe
     # --- BUCLE DE GENERACIÓN DE VARIABLES POR STACK ---
     for i in range(n_stacks):
         stk = lista_stacks[i]
-        base_item = stk['items'][0] # El item base define muchas cosas
-        n_pisos = len(stk['items'])
+        base_item = stk['niveles'][0] # El item base define muchas cosas
+        n_pisos = len(stk['niveles'])
         
         # 1. Variables de Decisión
         p_i = model.NewBoolVar(f'placed_{i}')
@@ -224,7 +271,7 @@ def resolver_contenedor_consolidado(lista_stacks, cont_l, cont_w, cont_h, max_pe
 
         # 3. Lógica de Slide (Solo si hay más de 1 piso)
         if n_pisos > 1:
-            max_slide = int(base_item['Largo'] * 0.20)
+            max_slide = int(base_item['Largo'] * 0.05)
             off = model.NewIntVar(-max_slide, max_slide, f'off_{i}')
             offset_upper.append(off)
             
@@ -255,7 +302,7 @@ def resolver_contenedor_consolidado(lista_stacks, cont_l, cont_w, cont_h, max_pe
         list_starts_x = []
         list_widths = []
 
-        for idx_it, item in enumerate(stk['items']):
+        for idx_it, item in enumerate(stk['niveles']):
             w_kg = int(item['Peso'])
             
             # Dimensiones locales
@@ -325,7 +372,7 @@ def resolver_contenedor_consolidado(lista_stacks, cont_l, cont_w, cont_h, max_pe
         moments_y.extend(current_stack_moments_y)
         
         # Altura Total
-        h_total_stack = sum(it['Alto'] for it in stk['items'])
+        h_total_stack = sum(it['Alto'] for it in stk['niveles'])
         model.Add(h_total_stack <= cont_h).OnlyEnforceIf(p_i)
 
     # --- COLISIONES ENTRE STACKS ---
@@ -417,31 +464,44 @@ def resolver_contenedor_consolidado(lista_stacks, cont_l, cont_w, cont_h, max_pe
                 xx = solver.Value(x[i])
                 yy = solver.Value(y[i])
                 rr = solver.Value(rotated[i]) == 1
-                off_val = solver.Value(offset_upper[i]) if len(stk['items']) > 1 else 0
+                off_val = solver.Value(offset_upper[i]) if len(stk['niveles']) > 1 else 0
                 
                 current_z = 0
                 
-                for idx_it, item in enumerate(stk['items']):
-                    # Definir X final (Base o Superior)
-                    final_x = xx if idx_it == 0 else xx + off_val
+                for idx_lvl, nivel in enumerate(stk['niveles']):
+                    # X inicial de este nivel (Base o Superior con slide 5%)
+                    inicio_x_nivel = xx if idx_lvl == 0 else xx + off_val
+                    offset_interno_x = 0 # Para ubicar piezas consecutivas
                     
-                    # Dimensiones si rota
-                    l_fin = item['Ancho'] if rr else item['Largo']
-                    w_fin = item['Largo'] if rr else item['Ancho']
+                    for item_real in nivel['items_internos']:
+                        # Definimos dimensiones finales según rotación general de la torre
+                        l_fin = item_real['Ancho'] if rr else item_real['Largo']
+                        w_fin = item_real['Largo'] if rr else item_real['Ancho']
+                        
+                        # Si la torre rotó, las piezas se apilan a lo largo del Eje Y
+                        # Si no rotó, se apilan a lo largo del Eje X
+                        if rr:
+                            final_x = inicio_x_nivel
+                            final_y = yy + offset_interno_x
+                            offset_interno_x += l_fin # Ocupamos Y
+                        else:
+                            final_x = inicio_x_nivel + offset_interno_x
+                            final_y = yy
+                            offset_interno_x += l_fin # Ocupamos X
                     
-                    results.append({
-                        'ID': item['ID'],
-                        'x': final_x, 'y': yy, 'z': current_z,
-                        'Largo': l_fin, 'Ancho': w_fin, 'Alto': item['Alto'],
-                        'Pedido': item.get('Pedido', ''),
-                        'Pos Pedido': item.get('Pos Pedido', ''),
-                        'Peso': item['Peso'], 'Color': item['Color'],
-                        'Rotado': 'Sí' if rr else 'No', 
-                        'Piso': f'Piso {idx_it + 1}',
-                        'Offset_Ref': off_val if idx_it > 0 else 0,
-                        'Block_Start': inicio_bloque
-                    })
-                    ids_usados.append(item['ID'])
+                        results.append({
+                            'ID': item_real['ID'],
+                            'x': final_x, 'y': final_y, 'z': current_z,
+                            'Largo': l_fin, 'Ancho': w_fin, 'Alto': item_real['Alto'],
+                            'Pedido': item_real.get('Pedido', ''),
+                            'Pos Pedido': item_real.get('Pos Pedido', ''),
+                            'Peso': item_real['Peso'], 'Color': item_real['Color'],
+                            'Rotado': 'Sí' if rr else 'No', 
+                            'Piso': f'Piso {idx_lvl + 1}',
+                            'Offset_Ref': off_val if idx_lvl > 0 else 0,
+                            'Block_Start': inicio_bloque
+                        })
+                        ids_usados.append(item_real['ID'])
                     current_z += item['Alto']
         
         return pd.DataFrame(results), peso_final, ids_usados, (cg_x_final, cg_y_final)
