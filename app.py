@@ -64,7 +64,11 @@ def limpiar_y_preparar_datos(df_raw):
     
     # 2. Dimensiones Fijas
     df['Ancho_cm'] = 110
-    df['Alto_cm'] = 120
+    if 'Alto' in df.columns:
+        df['Alto_cm'] = df['Alto'].apply(metros_a_cm)
+    else:
+        # Valor de respaldo por si suben un archivo antiguo sin la columna
+        df['Alto_cm'] = 120
     
     # 3. Identificadores y Key de Agrupación (Pedido + Pos)
     df['ID'] = df['Paquete']
@@ -846,5 +850,6 @@ if 'res' in st.session_state:
 
     if not sobrante.empty:
         st.error(f"⚠️ Quedaron {len(sobrante)} bultos sin cargar.")
+
 
 
