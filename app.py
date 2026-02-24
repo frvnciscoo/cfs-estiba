@@ -52,20 +52,24 @@ def limpiar_y_preparar_datos(df_raw):
     """Normaliza columnas: Paquete->ID, Largo fmt, Ancho/Alto fijos, Key Agrupación."""
     df = df_raw.copy()
     
-    # 1. Formatear Largo (de "4,8" string a 480 int)
-    def procesar_largo(val):
+    # Función unificada para pasar cualquier medida de Metros a Centímetros
+    def metros_a_cm(val):
         try:
             val_str = str(val).replace(',', '.')
             return int(float(val_str) * 100)
         except:
             return 0
 
-    df['Largo_cm'] = df['Largo'].apply(procesar_largo)
+    # 1. Formatear Largo 
+    df['Largo_cm'] = df['Largo'].apply(metros_a_cm)
     
-    # 2. Dimensiones Fijas
+    # 2. Dimensiones
+    # Si quieres que también lea el ancho real del excel en vez de 110, cámbialo a: 
+    # df['Ancho_cm'] = df['Ancho'].apply(metros_a_cm)
     df['Ancho_cm'] = 110
+    
     if 'Alto' in df.columns:
-        df['Alto_cm'] = df['Alto'].apply(metros_a_cm)
+        df['Alto_cm'] = df['Alto'].apply(metros_a_cm) # <--- Ahora SÍ existe la función
     else:
         # Valor de respaldo por si suben un archivo antiguo sin la columna
         df['Alto_cm'] = 120
@@ -601,6 +605,7 @@ with st.sidebar:
     
     df_clean = pd.DataFrame()
     seleccion_usuario = []
+    btn_calc = False
     
     # Procesamos el archivo INMEDIATAMENTE para obtener las opciones del selector
     if uploaded_file:
@@ -850,6 +855,7 @@ if 'res' in st.session_state:
 
     if not sobrante.empty:
         st.error(f"⚠️ Quedaron {len(sobrante)} bultos sin cargar.")
+
 
 
 
