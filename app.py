@@ -494,7 +494,7 @@ def resolver_contenedor_consolidado(lista_stacks, cont_l, cont_w, cont_h, max_pe
                         if rr:
                             final_x = inicio_x_nivel
                             final_y = yy + offset_interno_x
-                            offset_interno_x += l_fin # Ocupamos Y
+                            offset_interno_x += w_fin # Ocupamos Y
                         else:
                             final_x = inicio_x_nivel + offset_interno_x
                             final_y = yy
@@ -850,6 +850,7 @@ if 'res' in st.session_state:
 
     if not sobrante.empty:
         st.error(f"⚠️ Quedaron {len(sobrante)} bultos sin cargar.")
+
 
 
 
