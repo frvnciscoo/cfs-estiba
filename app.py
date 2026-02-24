@@ -513,7 +513,7 @@ def resolver_contenedor_consolidado(lista_stacks, cont_l, cont_w, cont_h, max_pe
                             'Block_Start': inicio_bloque
                         })
                         ids_usados.append(item_real['ID'])
-                    current_z += item['Alto']
+                    current_z += nivel['Alto']
         
         return pd.DataFrame(results), peso_final, ids_usados, (cg_x_final, cg_y_final)
     else:
@@ -833,28 +833,24 @@ if 'res' in st.session_state:
                 )
                 return f2
 
-            with c1: 
-                st.plotly_chart(
-                    plot_2d_interactivo(df_items[df_items['z']==0], "⬇️ Piso 1 (Base)"), 
-                    use_container_width=True
-                )
+# ✅ NUEVA LÓGICA DINÁMICA (Va justo después de que termina la función)
+            pisos_unicos = sorted(df_items['Piso'].unique())
+            columnas_pisos = st.columns(len(pisos_unicos))
             
-            with c2: 
-                # Solo mostramos piso 2 si hay algo
-                df_p2 = df_items[df_items['z']>0]
-                if not df_p2.empty:
+            for idx, nombre_piso in enumerate(pisos_unicos):
+                df_piso_actual = df_items[df_items['Piso'] == nombre_piso]
+                
+                with columnas_pisos[idx]: 
                     st.plotly_chart(
-                        plot_2d_interactivo(df_p2, "⬆️ Piso 2 (Superior)"), 
+                        plot_2d_interactivo(df_piso_actual, f"📦 {nombre_piso}"), 
                         use_container_width=True
                     )
-                else:
-                    st.info("Este contenedor no tiene carga en el segundo piso.")
-
-            # TAB 3: DATA
+                    
             with tabs[2]: st.dataframe(df_items)
 
     if not sobrante.empty:
         st.error(f"⚠️ Quedaron {len(sobrante)} bultos sin cargar.")
+
 
 
 
