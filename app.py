@@ -526,7 +526,7 @@ def resolver_contenedor_consolidado(lista_stacks, cont_l, cont_w, cont_h, max_pe
     else:
         return pd.DataFrame(), 0, [], (600, 117.5)
     
-def ejecutar_optimizacion_flota(df_total, max_peso):
+def ejecutar_optimizacion_flota(df_total, max_peso, min_vol=10.0, num_contenedores_fijos=0):
     """
     Optimiza la carga usando los contenedores necesarios o una cantidad fija.
     """
@@ -915,6 +915,7 @@ if 'res' in st.session_state:
 
     if not sobrante.empty:
         st.error(f"⚠️ Quedaron {len(sobrante)} bultos sin cargar.")
+
 
 
 
