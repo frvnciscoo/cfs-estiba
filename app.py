@@ -418,8 +418,8 @@ def resolver_contenedor_consolidado(lista_stacks, cont_l, cont_w, cont_h, max_pe
     # Límites CoG
     LIMIT_X_MIN = (600 - 60) * 2
     LIMIT_X_MAX = (600 + 60) * 2
-    LIMIT_Y_MIN = 195 
-    LIMIT_Y_MAX = 275 
+    LIMIT_Y_MIN = 185 
+    LIMIT_Y_MAX = 285 
 
     sum_mx = sum(moments_x)
     sum_my = sum(moments_y)
@@ -915,6 +915,7 @@ if 'res' in st.session_state:
 
     if not sobrante.empty:
         st.error(f"⚠️ Quedaron {len(sobrante)} bultos sin cargar.")
+
 
 
 
