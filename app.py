@@ -80,7 +80,13 @@ def limpiar_y_preparar_datos(df_raw):
     
     # 4. Asegurar Peso numérico
     df['Peso'] = pd.to_numeric(df['Peso'], errors='coerce').fillna(0)
-
+    
+    # NUEVO: Leer la columna Volumen del Excel
+    if 'Volumen' in df.columns:
+        df['Volumen'] = pd.to_numeric(df['Volumen'].astype(str).str.replace(',', '.'), errors='coerce').fillna(0)
+    else:
+        df['Volumen'] = 0.0 # Respaldo por si el archivo no la trae
+        
     # 5. Generar Color por Pedido para diferenciación visual
     unique_lengths = df['Largo_cm'].unique()
     color_map = {
@@ -507,6 +513,7 @@ def resolver_contenedor_consolidado(lista_stacks, cont_l, cont_w, cont_h, max_pe
                             'Pedido': item_real.get('Pedido', ''),
                             'Pos Pedido': item_real.get('Pos Pedido', ''),
                             'Peso': item_real['Peso'], 'Color': item_real['Color'],
+                            'Volumen': item_real.get('Volumen', 0),
                             'Rotado': 'Sí' if rr else 'No', 
                             'Piso': f'Piso {idx_lvl + 1}',
                             'Offset_Ref': off_val if idx_lvl > 0 else 0,
@@ -537,7 +544,7 @@ def ejecutar_optimizacion_flota(df_total, max_peso):
     total_grupos = len(grupos_pedidos)
     grupo_actual_idx = 0
     
-    MIN_VOL_M3 = 10.0  # RESTRICCIÓN DE NEGOCIO
+    MIN_VOL_M3 = 40.0  # RESTRICCIÓN DE NEGOCIO
 
     for pedido_key, df_grupo in grupos_pedidos:
         grupo_actual_idx += 1
@@ -559,7 +566,7 @@ def ejecutar_optimizacion_flota(df_total, max_peso):
             
             if not df_cargado.empty:
                 # Calcular volumen total del contenedor propuesto
-                df_cargado['m3'] = (df_cargado['Largo']*df_cargado['Ancho']*df_cargado['Alto'])/1e6
+                df_cargado['m3'] = df_cargado['Volumen']
                 vol_total = df_cargado['m3'].sum()
                 
                 # --- RESTRICCIÓN DE VOLUMEN MÍNIMO ---
@@ -850,6 +857,7 @@ if 'res' in st.session_state:
 
     if not sobrante.empty:
         st.error(f"⚠️ Quedaron {len(sobrante)} bultos sin cargar.")
+
 
 
 
