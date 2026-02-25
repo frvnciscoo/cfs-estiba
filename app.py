@@ -544,7 +544,7 @@ def ejecutar_optimizacion_flota(df_total, max_peso):
     total_grupos = len(grupos_pedidos)
     grupo_actual_idx = 0
     
-    MIN_VOL_M3 = 40.0  # RESTRICCIÓN DE NEGOCIO
+    MIN_VOL_M3 = 30.0  # RESTRICCIÓN DE NEGOCIO
 
     for pedido_key, df_grupo in grupos_pedidos:
         grupo_actual_idx += 1
@@ -857,6 +857,7 @@ if 'res' in st.session_state:
 
     if not sobrante.empty:
         st.error(f"⚠️ Quedaron {len(sobrante)} bultos sin cargar.")
+
 
 
 
