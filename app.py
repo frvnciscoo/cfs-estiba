@@ -97,7 +97,7 @@ def limpiar_y_preparar_datos(df_raw):
 
     # 6. Seleccionar y renombrar para el algoritmo
     df_final = df[[
-        'ID', 'Largo_cm', 'Ancho_cm', 'Alto_cm', 'Peso', 'Color', 'Pedido_Key', 'Pedido', 'Pos Pedido'
+        'ID', 'Largo_cm', 'Ancho_cm', 'Alto_cm', 'Peso', 'Volumen', 'Color', 'Pedido_Key', 'Pedido', 'Pos Pedido'
     ]].rename(columns={'Largo_cm': 'Largo', 'Ancho_cm': 'Ancho', 'Alto_cm': 'Alto'})
     
     # Ordenar para priorizar carga ordenada
@@ -544,7 +544,7 @@ def ejecutar_optimizacion_flota(df_total, max_peso):
     total_grupos = len(grupos_pedidos)
     grupo_actual_idx = 0
     
-    MIN_VOL_M3 = 0.0  # RESTRICCIÓN DE NEGOCIO
+    MIN_VOL_M3 = 40.0  # RESTRICCIÓN DE NEGOCIO
 
     for pedido_key, df_grupo in grupos_pedidos:
         grupo_actual_idx += 1
@@ -857,6 +857,7 @@ if 'res' in st.session_state:
 
     if not sobrante.empty:
         st.error(f"⚠️ Quedaron {len(sobrante)} bultos sin cargar.")
+
 
 
 
