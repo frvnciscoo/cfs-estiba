@@ -528,77 +528,119 @@ def resolver_contenedor_consolidado(lista_stacks, cont_l, cont_w, cont_h, max_pe
     
 def ejecutar_optimizacion_flota(df_total, max_peso):
     """
-    Optimiza la carga usando los contenedores necesarios.
-    Restricción: Si un contenedor generado tiene < 30 m3, se descarta y la carga queda en piso.
+    Optimiza la carga usando los contenedores necesarios o una cantidad fija.
     """
     contenedores_res = {}
     ids_cargados_total = set()
-    
-    # Agrupamos por Pedido + Posición (Ya viene filtrado desde el sidebar)
-    grupos_pedidos = df_total.groupby('Pedido_Key')
-    
-    cont_global_idx = 1
     progreso = st.progress(0)
     status = st.empty()
     
-    total_grupos = len(grupos_pedidos)
-    grupo_actual_idx = 0
-    
-    MIN_VOL_M3 = 40.0  # RESTRICCIÓN DE NEGOCIO
-
-    for pedido_key, df_grupo in grupos_pedidos:
-        grupo_actual_idx += 1
-        status.markdown(f"**Procesando:** {pedido_key}...")
+    # ---------------------------------------------------------
+    # MODO 1: CANTIDAD FIJA DE CONTENEDORES (Distribución Equitativa)
+    # ---------------------------------------------------------
+    if num_contenedores_fijos > 0:
+        status.markdown(f"**Distribuyendo carga equitativamente en {num_contenedores_fijos} contenedores...**")
         
-        items_pendientes_pedido = df_grupo.copy()
+        # Ordenamos todos los items por Largo y Peso para repartir los más grandes/pesados primero
+        df_sorted = df_total.sort_values(by=['Largo', 'Peso'], ascending=[False, False]).reset_index(drop=True)
         
-        # Bucle infinito: MIENTRAS queden items para este pedido
-        while not items_pendientes_pedido.empty:
+        for cont_idx in range(num_contenedores_fijos):
+            # Repartimos estilo "repartir cartas" (Round-Robin) usando el módulo del índice
+            items_subset = df_sorted[df_sorted.index % num_contenedores_fijos == cont_idx]
             
-            # Tomamos lote
-            batch = items_pendientes_pedido.head(80)
+            if items_subset.empty:
+                continue
+                
+            status.markdown(f"**Optimizando Contenedor {cont_idx + 1} de {num_contenedores_fijos}...**")
+            
+            # Tomamos un máximo de 80 items por contenedor para no saturar el solver
+            batch = items_subset.head(80) 
             pares_candidatos = generar_stacks_logicos(batch)
             
-            # Ejecutamos solver
             df_cargado, peso, ids, coords_cg = resolver_contenedor_consolidado(
                 pares_candidatos, 1200, 235, 269, int(max_peso)
             )
             
             if not df_cargado.empty:
-                # Calcular volumen total del contenedor propuesto
-                df_cargado['m3'] = df_cargado['Volumen']
+                # Usar columna 'Volumen' o calcular matemáticamente
+                if 'Volumen' in df_cargado.columns:
+                    df_cargado['m3'] = df_cargado['Volumen']
+                else:
+                    df_cargado['m3'] = (df_cargado['Largo']*df_cargado['Ancho']*df_cargado['Alto'])/1e6
+                
                 vol_total = df_cargado['m3'].sum()
                 
-                # --- RESTRICCIÓN DE VOLUMEN MÍNIMO ---
-                if vol_total < MIN_VOL_M3:
-                    # Si no cumple con 30m3, NO se genera el contenedor.
-                    # Rompemos el bucle de este pedido porque el remanente no justifica contenedor.
-                    # Los items se quedan en 'items_pendientes_pedido' y pasarán a piso.
-                    break 
-                
-                # Si cumple, guardamos el contenedor
-                contenedores_res[f"Contenedor {cont_global_idx}"] = {
-                    "items": df_cargado,
-                    "peso_total": peso,
-                    "m3_total": vol_total,
-                    "cg_x": coords_cg[0],
-                    "cg_y": coords_cg[1],
-                    "pedidos": [pedido_key]
-                }
-                
-                ids_cargados_total.update(ids)
-                items_pendientes_pedido = items_pendientes_pedido[~items_pendientes_pedido['ID'].isin(ids)]
-                cont_global_idx += 1
-            else:
-                # El solver no pudo meter nada (piezas gigantes o incompatibles)
-                break
-        
-        progreso.progress(grupo_actual_idx / total_grupos)
+                # RESTRICCIÓN DE VOLUMEN MÍNIMO
+                if vol_total >= min_vol:
+                    contenedores_res[f"Contenedor {cont_idx + 1}"] = {
+                        "items": df_cargado,
+                        "peso_total": peso,
+                        "m3_total": vol_total,
+                        "cg_x": coords_cg[0],
+                        "cg_y": coords_cg[1],
+                        "pedidos": items_subset['Pedido_Key'].unique().tolist()
+                    }
+                    ids_cargados_total.update(ids)
+            
+            progreso.progress((cont_idx + 1) / num_contenedores_fijos)
 
-    status.success(f"✅ ¡Planificación completada! Se generaron {cont_global_idx - 1} contenedores.")
+    # ---------------------------------------------------------
+    # MODO 2: AUTOMÁTICO (Agrupado por pedido y llenado al máximo)
+    # ---------------------------------------------------------
+    else:
+        grupos_pedidos = df_total.groupby('Pedido_Key')
+        cont_global_idx = 1
+        total_grupos = len(grupos_pedidos)
+        grupo_actual_idx = 0
+
+        for pedido_key, df_grupo in grupos_pedidos:
+            grupo_actual_idx += 1
+            status.markdown(f"**Procesando:** {pedido_key}...")
+            
+            items_pendientes_pedido = df_grupo.copy()
+            
+            while not items_pendientes_pedido.empty:
+                batch = items_pendientes_pedido.head(80)
+                pares_candidatos = generar_stacks_logicos(batch)
+                
+                df_cargado, peso, ids, coords_cg = resolver_contenedor_consolidado(
+                    pares_candidatos, 1200, 235, 269, int(max_peso)
+                )
+                
+                if not df_cargado.empty:
+                    # Usar columna 'Volumen' o calcular matemáticamente
+                    if 'Volumen' in df_cargado.columns:
+                        df_cargado['m3'] = df_cargado['Volumen']
+                    else:
+                        df_cargado['m3'] = (df_cargado['Largo']*df_cargado['Ancho']*df_cargado['Alto'])/1e6
+                        
+                    vol_total = df_cargado['m3'].sum()
+                    
+                    # RESTRICCIÓN DE VOLUMEN MÍNIMO
+                    if vol_total < min_vol:
+                        break 
+                    
+                    contenedores_res[f"Contenedor {cont_global_idx}"] = {
+                        "items": df_cargado,
+                        "peso_total": peso,
+                        "m3_total": vol_total,
+                        "cg_x": coords_cg[0],
+                        "cg_y": coords_cg[1],
+                        "pedidos": [pedido_key]
+                    }
+                    
+                    ids_cargados_total.update(ids)
+                    items_pendientes_pedido = items_pendientes_pedido[~items_pendientes_pedido['ID'].isin(ids)]
+                    cont_global_idx += 1
+                else:
+                    break
+            
+            progreso.progress(grupo_actual_idx / total_grupos)
+
+    status.success(f"✅ ¡Planificación completada! Se generaron {len(contenedores_res)} contenedores.")
     progreso.empty()
     
-    # Calculamos sobrantes (Todo lo que no entró o no cumplió el mínimo de 30m3)
+    # Calculamos sobrantes
     items_sobrantes = df_total[~df_total['ID'].isin(ids_cargados_total)]
     
     return contenedores_res, items_sobrantes
@@ -641,7 +683,18 @@ with st.sidebar:
             
             st.divider()
             max_w = st.number_input("Peso Máx por Contenedor (kg)", value=26000)
-            st.info("Nota: Se descartarán contenedores con < 30 m³.")
+            
+            # --- NUEVOS INPUTS AÑADIDOS ---
+            col1, col2 = st.columns(2)
+            with col1:
+                min_v = st.number_input("Volumen Mínimo (m³)", value=10.0, step=1.0)
+            with col2:
+                num_cont = st.number_input("Cant. Contenedores", min_value=0, value=0, step=1, help="0 = Automático")
+            
+            if num_cont == 0:
+                st.info(f"Modo Automático: Se generarán los contenedores necesarios. Se descartarán aquellos con < {min_v} m³.")
+            else:
+                st.info(f"Modo Fijo: La carga se distribuirá equitativamente en {num_cont} contenedores.")
             
             btn_calc = st.button("🚀 Calcular Carga", type="primary", disabled=(len(seleccion_keys)==0))
             
@@ -656,8 +709,13 @@ if uploaded_file and btn_calc and not df_clean.empty:
     if df_procesar.empty:
         st.warning("No hay ítems en la selección realizada.")
     else:
-        # 2. Ejecutamos la optimización SIN pasar número de contenedores
-        st.session_state['res'] = ejecutar_optimizacion_flota(df_procesar, max_w)
+        # 2. Ejecutamos la optimización pasando los nuevos parámetros
+        st.session_state['res'] = ejecutar_optimizacion_flota(
+            df_total=df_procesar, 
+            max_peso=max_w, 
+            min_vol=min_v, 
+            num_contenedores_fijos=num_cont
+        )
 
 # ==============================================================================
 # 5. VISUALIZACIÓN DE RESULTADOS (COMPATIBLE VERSIONES ANTIGUAS)
@@ -857,6 +915,7 @@ if 'res' in st.session_state:
 
     if not sobrante.empty:
         st.error(f"⚠️ Quedaron {len(sobrante)} bultos sin cargar.")
+
 
 
 
