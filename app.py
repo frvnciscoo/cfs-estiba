@@ -65,8 +65,11 @@ def limpiar_y_preparar_datos(df_raw):
     
     # 2. Dimensiones
     # Si quieres que también lea el ancho real del excel en vez de 110, cámbialo a: 
-    # df['Ancho_cm'] = df['Ancho'].apply(metros_a_cm)
-    df['Ancho_cm'] = 110
+    if 'Ancho' in df.columns:
+        df['Ancho_cm'] = df['Ancho'].apply(metros_a_cm) # <--- Ahora SÍ existe la función
+    else:
+        # Valor de respaldo por si suben un archivo antiguo sin la columna
+        df['Ancho_cm'] = 70
     
     if 'Alto' in df.columns:
         df['Alto_cm'] = df['Alto'].apply(metros_a_cm) # <--- Ahora SÍ existe la función
@@ -230,7 +233,7 @@ def resolver_contenedor_consolidado(lista_stacks, cont_l, cont_w, cont_h, max_pe
     y = []
     rotated = []
     placed = []
-    stick_left = [] # Para pegar a muros
+
     
     offset_upper = [] # Deslizamiento de los pisos superiores respecto a la base
     abs_offsets = [] 
@@ -263,10 +266,7 @@ def resolver_contenedor_consolidado(lista_stacks, cont_l, cont_w, cont_h, max_pe
         
         y_i = model.NewIntVar(0, cont_w, f'y_{i}')
         y.append(y_i)
-        
-        sl_i = model.NewBoolVar(f'left_{i}')
-        stick_left.append(sl_i)
-
+            
         # Conexión Bloque
         model.Add(x_i == block_start + xr_i).OnlyEnforceIf(p_i)
         
@@ -284,9 +284,15 @@ def resolver_contenedor_consolidado(lista_stacks, cont_l, cont_w, cont_h, max_pe
         model.Add(l_base_eff == base_item['Ancho']).OnlyEnforceIf(r_i)
         model.Add(w_base_eff == base_item['Largo']).OnlyEnforceIf(r_i)
 
+        # Definimos 3 posibles estados de ubicación transversal
+        y_left = model.NewBoolVar(f'yl_{i}')
+        y_right = model.NewBoolVar(f'yr_{i}')
+        y_mid = model.NewBoolVar(f'ym_{i}')
+
+        model.AddExactlyOne([y_left, y_right, y_mid])
         # Muros (Y)
-        model.Add(y_i == 0).OnlyEnforceIf([p_i, sl_i])
-        model.Add(y_i == cont_w - w_base_eff).OnlyEnforceIf([p_i, sl_i.Not()])
+        model.Add(y_i == 0).OnlyEnforceIf([p_i, y_left])
+        model.Add(y_i == cont_w - w_base_eff).OnlyEnforceIf([p_i, y_right])
 
         # 3. Lógica de Slide (Solo si hay más de 1 piso)
         if n_pisos > 1:
@@ -917,7 +923,6 @@ if 'res' in st.session_state:
 
     if not sobrante.empty:
         st.error(f"⚠️ Quedaron {len(sobrante)} bultos sin cargar.")
-
 
 
 
