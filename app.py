@@ -128,6 +128,8 @@ def buscar_combinacion_nivel(candidatos, largo_base, max_h_disp, tolerancia=40, 
     return mejor_combo
 
 def generar_stacks_logicos(df_items, max_h_cont=269):
+    MARGIN_ROOF = 21
+    h_max_efectiva = max_h_cont - MARGIN_ROOF
     items = df_items.sort_values(by=['Pedido_Key', 'Largo', 'Peso'], ascending=[True, False, False]).to_dict('records')
     stacks = []
     usados = set()
@@ -154,7 +156,7 @@ def generar_stacks_logicos(df_items, max_h_cont=269):
         
         # Intentamos buscar hasta 2 niveles más (pisos 2 y 3)
         for nivel in range(2): 
-            h_disponible = max_h_cont - current_h
+            h_disponible = max_h_efectiva - current_h
             if h_disponible < 10: break # Ya no hay altura útil
             
             # Filtramos candidatos del mismo pedido y que no superen la altura disponible
@@ -215,9 +217,9 @@ def resolver_contenedor_consolidado(lista_stacks, cont_l, cont_w, cont_h, max_pe
     n_stacks = len(lista_stacks)
     
     # --- CONFIGURACIÓN ---
-    GAP_Y = 10        
+    GAP_Y = 11        
     MARGIN_DOOR = 10  
-    
+    MARGIN_ROOF = 21
     # --- VARIABLES GLOBALES ---
     block_start = model.NewIntVar(0, cont_l, 'block_start')
     total_weight_var = model.NewIntVar(0, max_peso, 'total_weight')
@@ -390,7 +392,7 @@ def resolver_contenedor_consolidado(lista_stacks, cont_l, cont_w, cont_h, max_pe
         
         # Altura Total
         h_total_stack = sum(it['Alto'] for it in stk['niveles'])
-        model.Add(h_total_stack <= cont_h).OnlyEnforceIf(p_i)
+        model.Add(h_total_stack <= cont_h - MARGIN_ROOF).OnlyEnforceIf(p_i)
 
     # --- COLISIONES ENTRE STACKS ---
     for i in range(n_stacks):
@@ -915,6 +917,7 @@ if 'res' in st.session_state:
 
     if not sobrante.empty:
         st.error(f"⚠️ Quedaron {len(sobrante)} bultos sin cargar.")
+
 
 
 
