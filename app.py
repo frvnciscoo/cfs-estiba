@@ -156,7 +156,7 @@ def generar_stacks_logicos(df_items, max_h_cont=269):
         
         # Intentamos buscar hasta 2 niveles más (pisos 2 y 3)
         for nivel in range(2): 
-            h_disponible = max_h_efectiva - current_h
+            h_disponible = h_max_efectiva - current_h
             if h_disponible < 10: break # Ya no hay altura útil
             
             # Filtramos candidatos del mismo pedido y que no superen la altura disponible
@@ -917,6 +917,7 @@ if 'res' in st.session_state:
 
     if not sobrante.empty:
         st.error(f"⚠️ Quedaron {len(sobrante)} bultos sin cargar.")
+
 
 
 
