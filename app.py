@@ -8,7 +8,9 @@ from sklearn.preprocessing import StandardScaler
 import numpy as np
 import plotly.express as px
 import itertools
+import xlsxwriter
 import io
+
 # ==============================================================================
 # CONFIGURACIÓN DE LA PÁGINA
 # ==============================================================================
@@ -652,63 +654,7 @@ def ejecutar_optimizacion_flota(df_total, max_peso, min_vol=10.0, num_contenedor
     items_sobrantes = df_total[~df_total['ID'].isin(ids_cargados_total)]
     
     return contenedores_res, items_sobrantes
-import io
 
-# ==============================================================================
-# 6. FUNCIÓN DE EXPORTACIÓN A EXCEL (MULTIPLE HOJA)
-# ==============================================================================
-def generar_excel_descarga(resultados_dict, df_sobrante):
-    output = io.BytesIO()
-    # Usamos XlsxWriter como motor para soportar múltiples hojas
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        
-        # 1. Hoja de Resumen de Contenedores
-        resumen_data = []
-        for nombre, data in resultados_dict.items():
-            resumen_data.append({
-                "Contenedor": nombre,
-                "Peso Total (kg)": data['peso_total'],
-                "Volumen (m3)": data['m3_total'],
-                "CoG X": data['cg_x'],
-                "CoG Y": data['cg_y'],
-                "Cant. Paquetes": len(data['items'])
-            })
-        
-        df_resumen = pd.DataFrame(resumen_data)
-        df_resumen.to_excel(writer, sheet_name='Resumen_Flota', index=False)
-        
-        # 2. Hoja por cada Contenedor con detalle completo
-        for nombre, data in resultados_dict.items():
-            # Limpiamos el nombre para que sea válido como pestaña de Excel
-            sheet_name = nombre.replace(" ", "_")[:31]
-            data['items'].to_excel(writer, sheet_name=sheet_name, index=False)
-            
-        # 3. Hoja de Sobrantes
-        if not df_sobrante.empty:
-            df_sobrante.to_excel(writer, sheet_name='Sobrantes', index=False)
-            
-    return output.getvalue()
-
-# ==============================================================================
-# INTEGRACIÓN EN LA INTERFAZ
-# ==============================================================================
-if 'res' in st.session_state:
-    resultados, sobrante = st.session_state['res']
-    
-    if resultados:
-        st.divider()
-        st.subheader("📥 Exportar Planificación")
-        
-        # Generar el archivo en memoria
-        excel_data = generar_excel_descarga(resultados, sobrante)
-        
-        st.download_button(
-            label="Descargar Plan de Estiba (Excel)",
-            data=excel_data,
-            file_name=f"Plan_Estiba_SVTI_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            icon="📊"
-        )
 # ==============================================================================
 # 4. INTERFAZ DE USUARIO (SIDEBAR + EJECUCIÓN)
 # ==============================================================================
@@ -780,7 +726,40 @@ if uploaded_file and btn_calc and not df_clean.empty:
             min_vol=min_v, 
             num_contenedores_fijos=num_cont
         )
-
+# ==============================================================================
+# 6. FUNCIÓN DE EXPORTACIÓN A EXCEL (MULTIPLE HOJA)
+# ==============================================================================
+def generar_excel_descarga(resultados_dict, df_sobrante):
+    output = io.BytesIO()
+    # Usamos XlsxWriter como motor para soportar múltiples hojas
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        
+        # 1. Hoja de Resumen de Contenedores
+        resumen_data = []
+        for nombre, data in resultados_dict.items():
+            resumen_data.append({
+                "Contenedor": nombre,
+                "Peso Total (kg)": data['peso_total'],
+                "Volumen (m3)": data['m3_total'],
+                "CoG X": data['cg_x'],
+                "CoG Y": data['cg_y'],
+                "Cant. Paquetes": len(data['items'])
+            })
+        
+        df_resumen = pd.DataFrame(resumen_data)
+        df_resumen.to_excel(writer, sheet_name='Resumen_Flota', index=False)
+        
+        # 2. Hoja por cada Contenedor con detalle completo
+        for nombre, data in resultados_dict.items():
+            # Limpiamos el nombre para que sea válido como pestaña de Excel
+            sheet_name = nombre.replace(" ", "_")[:31]
+            data['items'].to_excel(writer, sheet_name=sheet_name, index=False)
+            
+        # 3. Hoja de Sobrantes
+        if not df_sobrante.empty:
+            df_sobrante.to_excel(writer, sheet_name='Sobrantes', index=False)
+            
+    return output.getvalue()
 # ==============================================================================
 # 5. VISUALIZACIÓN DE RESULTADOS (COMPATIBLE VERSIONES ANTIGUAS)
 # ==============================================================================
@@ -789,7 +768,22 @@ if 'res' in st.session_state:
     
     # Placeholder para limpiar la pantalla
     viz_placeholder = st.empty()
-    
+
+    if resultados:
+        st.divider()
+        st.subheader("📥 Exportar Planificación")
+        
+        # Generar el archivo en memoria
+        excel_data = generar_excel_descarga(resultados, sobrante)
+        
+        st.download_button(
+            label="Descargar Plan de Estiba (Excel)",
+            data=excel_data,
+            file_name=f"Plan_Estiba_SVTI_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            icon="📊"
+        )
+
     if resultados:
         with viz_placeholder.container():
             # ---------------- SELECTOR ----------------
@@ -979,7 +973,6 @@ if 'res' in st.session_state:
 
     if not sobrante.empty:
         st.error(f"⚠️ Quedaron {len(sobrante)} bultos sin cargar.")
-
 
 
 
