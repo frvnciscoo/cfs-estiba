@@ -224,8 +224,7 @@ def resolver_contenedor_consolidado(lista_stacks, cont_l, cont_w, cont_h, max_pe
     model = cp_model.CpModel()
     n_stacks = len(lista_stacks)
     
-    # --- CONFIGURACIÓN ---
-    GAP_Y = 11        
+    # --- CONFIGURACIÓN ---    
     MARGIN_DOOR = 10  
     MARGIN_ROOF = 21
     # --- VARIABLES GLOBALES ---
@@ -985,6 +984,7 @@ if 'res' in st.session_state:
 
     if not sobrante.empty:
         st.error(f"⚠️ Quedaron {len(sobrante)} bultos sin cargar.")
+
 
 
 
