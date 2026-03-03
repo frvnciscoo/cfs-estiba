@@ -740,9 +740,16 @@ def generar_excel_descarga(resultados_dict, df_sobrante):
         # 1. Hoja de Resumen de Contenedores
         resumen_data = []
         for nombre, data in resultados_dict.items():
+            
+            # --- LÓGICA FALTANTE: Calcular la variable 'descripciones' ---
+            descripciones = ""
+            if 'Des' in data['items'].columns:
+                descripciones = ", ".join(data['items']['Des'].replace("", float("NaN")).dropna().unique().astype(str))
+            # -------------------------------------------------------------
+            
             resumen_data.append({
                 "Contenedor": nombre,
-                "Descripción": descripciones,
+                "Descripción": descripciones, # Ahora sí sabe de dónde sacar este valor
                 "Peso Total (kg)": data['peso_total'],
                 "Volumen (m3)": data['m3_total'],
                 "CoG X": data['cg_x'],
@@ -977,6 +984,7 @@ if 'res' in st.session_state:
 
     if not sobrante.empty:
         st.error(f"⚠️ Quedaron {len(sobrante)} bultos sin cargar.")
+
 
 
 
