@@ -136,7 +136,7 @@ def buscar_combinacion_nivel(candidatos, largo_base, max_h_disp, tolerancia=40, 
     return mejor_combo
 
 def generar_stacks_logicos(df_items, max_h_cont=269):
-    GAP_Y = 0
+    GAP_Y = 1
     MARGIN_ROOF = 21
     h_max_efectiva = max_h_cont - MARGIN_ROOF
     items = df_items.sort_values(by=['Pedido_Key', 'Largo', 'Peso'], ascending=[True, False, False]).to_dict('records')
@@ -985,6 +985,7 @@ if 'res' in st.session_state:
 
     if not sobrante.empty:
         st.error(f"⚠️ Quedaron {len(sobrante)} bultos sin cargar.")
+
 
 
 
