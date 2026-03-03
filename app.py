@@ -99,7 +99,9 @@ def limpiar_y_preparar_datos(df_raw):
         for l in unique_lengths
     }
     df['Color'] = df['Largo_cm'].map(color_map)
-
+    
+    if 'Des' not in df.columns:
+        df['Des'] = "" # Respaldo por si el archivo no la trae
     # 6. Seleccionar y renombrar para el algoritmo
     df_final = df[[
         'ID', 'Largo_cm', 'Ancho_cm', 'Alto_cm', 'Peso', 'Volumen', 'Color', 'Pedido_Key', 'Pedido', 'Pos Pedido'
@@ -973,6 +975,7 @@ if 'res' in st.session_state:
 
     if not sobrante.empty:
         st.error(f"⚠️ Quedaron {len(sobrante)} bultos sin cargar.")
+
 
 
 
