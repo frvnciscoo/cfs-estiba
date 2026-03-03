@@ -523,6 +523,7 @@ def resolver_contenedor_consolidado(lista_stacks, cont_l, cont_w, cont_h, max_pe
                             'x': final_x, 'y': final_y, 'z': current_z,
                             'Largo': l_fin, 'Ancho': w_fin, 'Alto': item_real['Alto'],
                             'Pedido': item_real.get('Pedido', ''),
+                            'Des': item_real.get('Des', ''),
                             'Pos Pedido': item_real.get('Pos Pedido', ''),
                             'Peso': item_real['Peso'], 'Color': item_real['Color'],
                             'Volumen': item_real.get('Volumen', 0),
@@ -741,6 +742,7 @@ def generar_excel_descarga(resultados_dict, df_sobrante):
         for nombre, data in resultados_dict.items():
             resumen_data.append({
                 "Contenedor": nombre,
+                "Descripción": descripciones,
                 "Peso Total (kg)": data['peso_total'],
                 "Volumen (m3)": data['m3_total'],
                 "CoG X": data['cg_x'],
@@ -975,6 +977,7 @@ if 'res' in st.session_state:
 
     if not sobrante.empty:
         st.error(f"⚠️ Quedaron {len(sobrante)} bultos sin cargar.")
+
 
 
 
