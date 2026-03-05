@@ -985,7 +985,23 @@ if 'res' in st.session_state:
             with tabs[2]: st.dataframe(df_items)
 
     if not sobrante.empty:
-        st.error(f"⚠️ Quedaron {len(sobrante)} bultos sin cargar.")
+        st.error(f"⚠️ Quedaron {len(sobrante)} bultos en piso (sin cargar).")
+        
+        # Agregamos un expander para mantener la interfaz limpia
+        with st.expander("📦 Ver detalle de paquetes en piso", expanded=True):
+            # Seleccionamos las columnas más relevantes para mostrar al usuario
+            columnas_mostrar = ['ID', 'Pedido', 'Pos Pedido', 'Des', 'Largo', 'Ancho', 'Alto', 'Peso', 'Volumen']
+            
+            # Filtramos solo las columnas que realmente existan para evitar errores
+            columnas_existentes = [col for col in columnas_mostrar if col in sobrante.columns]
+            
+            # Mostramos la tabla interactiva
+            st.dataframe(
+                sobrante[columnas_existentes],
+                use_container_width=True,
+                hide_index=True
+            )
+
 
 
 
