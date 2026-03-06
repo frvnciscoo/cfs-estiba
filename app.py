@@ -137,7 +137,7 @@ def buscar_combinacion_nivel(candidatos, largo_base, max_h_disp, tolerancia=40, 
 
 def generar_stacks_logicos(df_items, max_h_cont=269):
     
-    MARGIN_ROOF = 21
+    MARGIN_ROOF = 11
     h_max_efectiva = max_h_cont - MARGIN_ROOF
     items = df_items.sort_values(by=['Pedido_Key', 'Largo', 'Peso'], ascending=[True, False, False]).to_dict('records')
     stacks = []
@@ -1001,6 +1001,7 @@ if 'res' in st.session_state:
                 use_container_width=True,
                 hide_index=True
             )
+
 
 
 
