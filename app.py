@@ -228,7 +228,7 @@ def resolver_contenedor_consolidado(lista_stacks, cont_l, cont_w, cont_h, max_pe
     # --- CONFIGURACIÓN ---   
     GAP_Y = 1
     MARGIN_DOOR = 10  
-    MARGIN_ROOF = 21
+    MARGIN_ROOF = 11
     # --- VARIABLES GLOBALES ---
     block_start = model.NewIntVar(0, cont_l, 'block_start')
     total_weight_var = model.NewIntVar(0, max_peso, 'total_weight')
@@ -1001,6 +1001,7 @@ if 'res' in st.session_state:
                 use_container_width=True,
                 hide_index=True
             )
+
 
 
 
